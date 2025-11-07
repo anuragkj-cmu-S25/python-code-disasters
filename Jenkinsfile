@@ -264,7 +264,7 @@ EOF
                         gcloud storage rm -r ${GCS_BUCKET}/input/ 2>/dev/null || true
                         gcloud storage cp -r hadoop_input/* ${GCS_BUCKET}/input/
                         echo "✅ Input files uploaded to ${GCS_BUCKET}/input/"
-                    """
+                    '''
                 }
             }
         }
@@ -284,12 +284,12 @@ EOF
                     """
                     
                     // Submit the Hadoop Streaming job
+                    // Note: For Dataproc, hadoop-streaming.jar is already in classpath
                     sh """
                         gcloud dataproc jobs submit hadoop \
                             --cluster=${DATAPROC_CLUSTER} \
                             --region=${DATAPROC_REGION} \
                             --class=org.apache.hadoop.streaming.HadoopStreaming \
-                            --jars=file:///usr/lib/hadoop-mapreduce/hadoop-streaming.jar \
                             -- \
                             -files ${GCS_BUCKET}/scripts/line_counter.py \
                             -input ${GCS_BUCKET}/input/* \
