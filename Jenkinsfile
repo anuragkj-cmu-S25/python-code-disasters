@@ -8,16 +8,15 @@ pipeline {
         DATAPROC_CLUSTER = 'hadoop-cluster'
         DATAPROC_REGION = 'us-central1'
         GCS_BUCKET = "gs://${GCP_PROJECT_ID}-hadoop-output"
-        // Use 4.7.0 which is compatible with Java 11
-        SONAR_SCANNER_VERSION = '4.7.0.2747'
+        SONAR_SCANNER_VERSION = '4.8.0.2856'
         SONAR_SCANNER_HOME = "${WORKSPACE}/.sonar/sonar-scanner-${SONAR_SCANNER_VERSION}-linux"
     }
     
     stages {
-        stage('Declarative: Checkout SCM') {
+        stage('Checkout') {
             steps {
                 echo '========================================='
-                echo 'Checking out code from GitHub'
+                echo 'Stage 1: Checking out code from GitHub'
                 echo '========================================='
                 checkout scm
                 sh 'ls -la'
@@ -25,41 +24,25 @@ pipeline {
             }
         }
         
-        stage('Checkout') {
+        stage('Setup Google Cloud CLI') {
             steps {
                 echo '========================================='
-                echo 'Stage 1: Verify gcloud installation'
+                echo 'Stage 2: Setting up Google Cloud CLI'
                 echo '========================================='
                 script {
-                    // Check if gcloud is installed, if not provide helpful error
-                    def gcloudCheck = sh(
-                        script: 'command -v gcloud || echo "NOT_FOUND"',
-                        returnStdout: true
-                    ).trim()
-                    
-                    if (gcloudCheck == "NOT_FOUND") {
-                        error('''
-                        ❌ ERROR: gcloud CLI is not installed on this Jenkins agent!
-                        
-                        To fix this, you need to:
-                        1. SSH into your Jenkins pod/container
-                        2. Install gcloud CLI by running:
-                           
-                           curl https://sdk.cloud.google.com | bash
-                           exec -l $SHELL
-                           gcloud init --console-only
-                           
-                        OR update your Jenkins agent Docker image to include gcloud.
-                        
-                        For Kubernetes deployment, add this to your Jenkins agent container:
-                           - Install gcloud in the Dockerfile
-                           - Mount service account credentials
-                           - Configure gcloud auth in the pipeline
-                        ''')
-                    } else {
-                        echo "✅ gcloud CLI is installed: ${gcloudCheck}"
-                        sh 'gcloud version'
-                    }
+                    sh '''
+                        if ! command -v gcloud &> /dev/null; then
+                            echo "Installing Google Cloud CLI..."
+                            curl -sSL https://sdk.cloud.google.com | bash
+                            export PATH="$HOME/google-cloud-sdk/bin:$PATH"
+                            gcloud --version
+                        else
+                            echo "Google Cloud CLI already installed"
+                            gcloud --version
+                        fi
+                    '''
+                    // Add gcloud to PATH for subsequent stages
+                    env.PATH = "${env.HOME}/google-cloud-sdk/bin:${env.PATH}"
                 }
             }
         }
@@ -67,22 +50,22 @@ pipeline {
         stage('Setup SonarQube Scanner') {
             steps {
                 echo '========================================='
-                echo 'Stage 2: Setting up SonarQube Scanner'
+                echo 'Stage 3: Setting up SonarQube Scanner'
                 echo '========================================='
                 script {
                     // Check if scanner already exists, if not download it
                     sh '''
                         if [ ! -d "${SONAR_SCANNER_HOME}" ]; then
-                            echo "Downloading SonarQube Scanner ${SONAR_SCANNER_VERSION} (Java 11 compatible)..."
+                            echo "Downloading SonarQube Scanner..."
                             mkdir -p ${WORKSPACE}/.sonar
                             cd ${WORKSPACE}/.sonar
                             curl -sSLO https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
                             unzip -q sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
                             rm sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
                             chmod +x ${SONAR_SCANNER_HOME}/bin/sonar-scanner
-                            echo "✅ SonarQube Scanner installed successfully"
+                            echo "SonarQube Scanner installed successfully"
                         else
-                            echo "✅ SonarQube Scanner already installed"
+                            echo "SonarQube Scanner already installed"
                         fi
                     '''
                 }
@@ -92,17 +75,17 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 echo '========================================='
-                echo 'Stage 3: Running SonarQube Analysis'
+                echo 'Stage 4: Running SonarQube Analysis'
                 echo '========================================='
                 script {
-                    sh '''
+                    sh """
                         ${SONAR_SCANNER_HOME}/bin/sonar-scanner \
                             -Dsonar.projectKey=python-code-disasters \
                             -Dsonar.sources=. \
                             -Dsonar.host.url=${SONARQUBE_URL} \
                             -Dsonar.login=${SONAR_TOKEN} \
                             -Dsonar.python.version=3
-                    '''
+                    """
                 }
             }
         }
@@ -110,7 +93,7 @@ pipeline {
         stage('Quality Gate Check') {
             steps {
                 echo '========================================='
-                echo 'Stage 4: Checking Quality Gate Status'
+                echo 'Stage 5: Checking Quality Gate Status'
                 echo '========================================='
                 script {
                     // Wait for SonarQube to process the analysis
@@ -118,11 +101,11 @@ pipeline {
                     
                     // Get quality gate status
                     def qualityGate = sh(
-                        script: '''
+                        script: """
                             curl -s -u ${SONAR_TOKEN}: \
                             '${SONARQUBE_URL}/api/qualitygates/project_status?projectKey=python-code-disasters' \
                             | grep -o '"status":"[^"]*"' | cut -d'"' -f4
-                        ''',
+                        """,
                         returnStdout: true
                     ).trim()
                     
@@ -130,11 +113,11 @@ pipeline {
                     
                     // Get blocker issues count
                     def blockerCount = sh(
-                        script: '''
+                        script: """
                             curl -s -u ${SONAR_TOKEN}: \
                             '${SONARQUBE_URL}/api/issues/search?componentKeys=python-code-disasters&severities=BLOCKER&resolved=false' \
                             | grep -o '"total":[0-9]*' | head -1 | cut -d':' -f2
-                        ''',
+                        """,
                         returnStdout: true
                     ).trim()
                     
@@ -162,7 +145,7 @@ pipeline {
             }
             steps {
                 echo '========================================='
-                echo 'Stage 5: Uploading MapReduce Job to GCS'
+                echo 'Stage 6: Uploading MapReduce Job to GCS'
                 echo '========================================='
                 script {
                     // Create the MapReduce Python script
@@ -235,10 +218,12 @@ EOF
                     '''
                     
                     // Upload to GCS
-                    sh '''
-                        gcloud storage cp line_counter.py ${GCS_BUCKET}/scripts/
-                        echo "✅ MapReduce job uploaded to GCS"
-                    '''
+                    withEnv(["GCS_BUCKET=${GCS_BUCKET}"]) {
+                        sh '''
+                            gcloud storage cp line_counter.py ${GCS_BUCKET}/scripts/
+                            echo "✅ MapReduce job uploaded to GCS"
+                        '''
+                    }
                 }
             }
         }
@@ -249,7 +234,7 @@ EOF
             }
             steps {
                 echo '========================================='
-                echo 'Stage 6: Preparing Repository Files'
+                echo 'Stage 7: Preparing Repository Files'
                 echo '========================================='
                 script {
                     // Create a tarball of all Python files
@@ -262,11 +247,13 @@ EOF
                     '''
                     
                     // Upload input files to GCS
-                    sh '''
-                        gcloud storage rm -r ${GCS_BUCKET}/input/ || true
-                        gcloud storage cp -r hadoop_input/* ${GCS_BUCKET}/input/
-                        echo "✅ Input files uploaded to ${GCS_BUCKET}/input/"
-                    '''
+                    withEnv(["GCS_BUCKET=${GCS_BUCKET}"]) {
+                        sh '''
+                            gcloud storage rm -r ${GCS_BUCKET}/input/ || true
+                            gcloud storage cp -r hadoop_input/* ${GCS_BUCKET}/input/
+                            echo "✅ Input files uploaded to ${GCS_BUCKET}/input/"
+                        '''
+                    }
                 }
             }
         }
@@ -277,30 +264,32 @@ EOF
             }
             steps {
                 echo '========================================='
-                echo 'Stage 7: Running Hadoop MapReduce Job'
+                echo 'Stage 8: Running Hadoop MapReduce Job'
                 echo '========================================='
                 script {
-                    // Clean up previous output
-                    sh '''
-                        gcloud storage rm -r ${GCS_BUCKET}/output/ || true
-                    '''
-                    
-                    // Submit the Hadoop Streaming job
-                    sh '''
-                        gcloud dataproc jobs submit hadoop \
-                            --cluster=${DATAPROC_CLUSTER} \
-                            --region=${DATAPROC_REGION} \
-                            --class=org.apache.hadoop.streaming.HadoopStreaming \
-                            --jars=file:///usr/lib/hadoop-mapreduce/hadoop-streaming.jar \
-                            -- \
-                            -input ${GCS_BUCKET}/input/* \
-                            -output ${GCS_BUCKET}/output \
-                            -mapper "${GCS_BUCKET}/scripts/line_counter.py" \
-                            -reducer "${GCS_BUCKET}/scripts/line_counter.py reduce" \
-                            -file ${GCS_BUCKET}/scripts/line_counter.py
-                    '''
-                    
-                    echo "✅ Hadoop job submitted successfully!"
+                    withEnv(["GCS_BUCKET=${GCS_BUCKET}", "DATAPROC_CLUSTER=${DATAPROC_CLUSTER}", "DATAPROC_REGION=${DATAPROC_REGION}"]) {
+                        // Clean up previous output
+                        sh '''
+                            gcloud storage rm -r ${GCS_BUCKET}/output/ || true
+                        '''
+                        
+                        // Submit the Hadoop Streaming job
+                        sh '''
+                            gcloud dataproc jobs submit hadoop \
+                                --cluster=${DATAPROC_CLUSTER} \
+                                --region=${DATAPROC_REGION} \
+                                --class=org.apache.hadoop.streaming.HadoopStreaming \
+                                --jars=file:///usr/lib/hadoop-mapreduce/hadoop-streaming.jar \
+                                -- \
+                                -input ${GCS_BUCKET}/input/* \
+                                -output ${GCS_BUCKET}/output \
+                                -mapper "${GCS_BUCKET}/scripts/line_counter.py" \
+                                -reducer "${GCS_BUCKET}/scripts/line_counter.py reduce" \
+                                -file ${GCS_BUCKET}/scripts/line_counter.py
+                        '''
+                        
+                        echo "✅ Hadoop job submitted successfully!"
+                    }
                 }
             }
         }
@@ -311,25 +300,27 @@ EOF
             }
             steps {
                 echo '========================================='
-                echo 'Stage 8: Displaying Hadoop Job Results'
+                echo 'Stage 9: Displaying Hadoop Job Results'
                 echo '========================================='
                 script {
                     // Wait a bit for the job to complete
                     sleep(time: 10, unit: 'SECONDS')
                     
                     // Fetch and display results
-                    sh '''
-                        echo ""
-                        echo "========================================="
-                        echo "HADOOP JOB RESULTS - LINE COUNT PER FILE"
-                        echo "========================================="
-                        gcloud storage cat ${GCS_BUCKET}/output/part-* || echo "Results not ready yet, check GCS bucket manually"
-                        echo ""
-                        echo "========================================="
-                        echo "Results also available at:"
-                        echo "${GCS_BUCKET}/output/"
-                        echo "========================================="
-                    '''
+                    withEnv(["GCS_BUCKET=${GCS_BUCKET}"]) {
+                        sh '''
+                            echo ""
+                            echo "========================================="
+                            echo "HADOOP JOB RESULTS - LINE COUNT PER FILE"
+                            echo "========================================="
+                            gcloud storage cat ${GCS_BUCKET}/output/part-* || echo "Results not ready yet, check GCS bucket manually"
+                            echo ""
+                            echo "========================================="
+                            echo "Results also available at:"
+                            echo "${GCS_BUCKET}/output/"
+                            echo "========================================="
+                        '''
+                    }
                 }
             }
         }
@@ -347,7 +338,7 @@ EOF
                 } else if (env.RUN_HADOOP == 'true') {
                     echo "✅ Pipeline completed successfully"
                     echo "✅ Hadoop job executed and results available"
-                    echo "📊 View results: ${GCS_BUCKET}/output/"
+                    echo "📊 View results: gs://${GCP_PROJECT_ID}-hadoop-output/output/"
                 } else {
                     echo "⚠️  Pipeline completed with warnings"
                 }
