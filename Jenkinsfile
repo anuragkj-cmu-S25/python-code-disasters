@@ -36,7 +36,7 @@ pipeline {
                             echo "Downloading SonarQube Scanner..."
                             mkdir -p ${WORKSPACE}/.sonar
                             cd ${WORKSPACE}/.sonar
-                            wget -q https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
+                            curl -sSLO https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
                             unzip -q sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
                             rm sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
                             chmod +x ${SONAR_SCANNER_HOME}/bin/sonar-scanner
