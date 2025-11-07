@@ -7,19 +7,17 @@ pipeline {
         SONARQUBE_URL = 'http://sonarqube-sonarqube.sonarqube.svc.cluster.local:9000'
         DATAPROC_CLUSTER = 'hadoop-cluster'
         DATAPROC_REGION = 'us-central1'
-        // GCS_BUCKET will be constructed in script blocks to avoid interpolation warnings
+        GCS_BUCKET = "gs://${GCP_PROJECT_ID}-hadoop-output"
         // Use 4.7.0 which is compatible with Java 11
         SONAR_SCANNER_VERSION = '4.7.0.2747'
         SONAR_SCANNER_HOME = "${WORKSPACE}/.sonar/sonar-scanner-${SONAR_SCANNER_VERSION}-linux"
-        // Path to gcloud (will be installed if not present)
-        PATH = "/usr/local/google-cloud-sdk/bin:${env.PATH}"
     }
     
     stages {
         stage('Declarative: Checkout SCM') {
             steps {
                 echo '========================================='
-                echo 'Stage: Checking out code from GitHub'
+                echo 'Checking out code from GitHub'
                 echo '========================================='
                 checkout scm
                 sh 'ls -la'
@@ -30,21 +28,38 @@ pipeline {
         stage('Checkout') {
             steps {
                 echo '========================================='
-                echo 'Stage 1: Installing/Verifying gcloud CLI'
+                echo 'Stage 1: Verify gcloud installation'
                 echo '========================================='
                 script {
-                    sh '''
-                        if ! command -v gcloud &> /dev/null; then
-                            echo "gcloud not found, installing..."
-                            curl https://sdk.cloud.google.com | bash -s -- --disable-prompts --install-dir=/usr/local
-                            export PATH="/usr/local/google-cloud-sdk/bin:$PATH"
-                            gcloud --version
-                            echo "✅ gcloud installed successfully"
-                        else
-                            echo "✅ gcloud already installed"
-                            gcloud --version
-                        fi
-                    '''
+                    // Check if gcloud is installed, if not provide helpful error
+                    def gcloudCheck = sh(
+                        script: 'command -v gcloud || echo "NOT_FOUND"',
+                        returnStdout: true
+                    ).trim()
+                    
+                    if (gcloudCheck == "NOT_FOUND") {
+                        error('''
+                        ❌ ERROR: gcloud CLI is not installed on this Jenkins agent!
+                        
+                        To fix this, you need to:
+                        1. SSH into your Jenkins pod/container
+                        2. Install gcloud CLI by running:
+                           
+                           curl https://sdk.cloud.google.com | bash
+                           exec -l $SHELL
+                           gcloud init --console-only
+                           
+                        OR update your Jenkins agent Docker image to include gcloud.
+                        
+                        For Kubernetes deployment, add this to your Jenkins agent container:
+                           - Install gcloud in the Dockerfile
+                           - Mount service account credentials
+                           - Configure gcloud auth in the pipeline
+                        ''')
+                    } else {
+                        echo "✅ gcloud CLI is installed: ${gcloudCheck}"
+                        sh 'gcloud version'
+                    }
                 }
             }
         }
@@ -105,7 +120,7 @@ pipeline {
                     def qualityGate = sh(
                         script: '''
                             curl -s -u ${SONAR_TOKEN}: \
-                            "${SONARQUBE_URL}/api/qualitygates/project_status?projectKey=python-code-disasters" \
+                            '${SONARQUBE_URL}/api/qualitygates/project_status?projectKey=python-code-disasters' \
                             | grep -o '"status":"[^"]*"' | cut -d'"' -f4
                         ''',
                         returnStdout: true
@@ -117,7 +132,7 @@ pipeline {
                     def blockerCount = sh(
                         script: '''
                             curl -s -u ${SONAR_TOKEN}: \
-                            "${SONARQUBE_URL}/api/issues/search?componentKeys=python-code-disasters&severities=BLOCKER&resolved=false" \
+                            '${SONARQUBE_URL}/api/issues/search?componentKeys=python-code-disasters&severities=BLOCKER&resolved=false' \
                             | grep -o '"total":[0-9]*' | head -1 | cut -d':' -f2
                         ''',
                         returnStdout: true
@@ -150,9 +165,6 @@ pipeline {
                 echo 'Stage 5: Uploading MapReduce Job to GCS'
                 echo '========================================='
                 script {
-                    // Set GCS_BUCKET without interpolation warning
-                    env.GCS_BUCKET = "gs://${env.GCP_PROJECT_ID}-hadoop-output"
-                    
                     // Create the MapReduce Python script
                     sh '''
                         cat > line_counter.py << 'EOF'
@@ -222,7 +234,7 @@ EOF
                         chmod +x line_counter.py
                     '''
                     
-                    // Upload to GCS using environment variable
+                    // Upload to GCS
                     sh '''
                         gcloud storage cp line_counter.py ${GCS_BUCKET}/scripts/
                         echo "✅ MapReduce job uploaded to GCS"
@@ -249,7 +261,7 @@ EOF
                         ls -la hadoop_input/
                     '''
                     
-                    // Upload input files to GCS using environment variable
+                    // Upload input files to GCS
                     sh '''
                         gcloud storage rm -r ${GCS_BUCKET}/input/ || true
                         gcloud storage cp -r hadoop_input/* ${GCS_BUCKET}/input/
@@ -273,7 +285,7 @@ EOF
                         gcloud storage rm -r ${GCS_BUCKET}/output/ || true
                     '''
                     
-                    // Submit the Hadoop Streaming job using environment variables
+                    // Submit the Hadoop Streaming job
                     sh '''
                         gcloud dataproc jobs submit hadoop \
                             --cluster=${DATAPROC_CLUSTER} \
@@ -335,7 +347,7 @@ EOF
                 } else if (env.RUN_HADOOP == 'true') {
                     echo "✅ Pipeline completed successfully"
                     echo "✅ Hadoop job executed and results available"
-                    echo "📊 View results: ${env.GCS_BUCKET}/output/"
+                    echo "📊 View results: ${GCS_BUCKET}/output/"
                 } else {
                     echo "⚠️  Pipeline completed with warnings"
                 }
