@@ -239,12 +239,23 @@ EOF
                 echo 'Stage 6: Preparing Repository Files'
                 echo '========================================='
                 script {
-                    // Create directory with all Python files
+                    // Clean and recreate directory with all Python files
                     sh '''
+                        # Remove old hadoop_input if exists
+                        rm -rf hadoop_input
                         mkdir -p hadoop_input
-                        find . -name "*.py" -type f -not -path "./.sonar/*" -not -path "./.git/*" -not -path "./.gcloud/*" | while read file; do
+                        
+                        # Find and copy Python files, excluding temporary directories
+                        find . -name "*.py" -type f \
+                            -not -path "./.sonar/*" \
+                            -not -path "./.git/*" \
+                            -not -path "./.gcloud/*" \
+                            -not -path "./hadoop_input/*" \
+                            | while read file; do
                             cp "$file" "hadoop_input/"
                         done
+                        
+                        echo "Files prepared for Hadoop:"
                         ls -la hadoop_input/
                     '''
                     
