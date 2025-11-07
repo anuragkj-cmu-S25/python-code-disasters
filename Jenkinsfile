@@ -1,5 +1,26 @@
 pipeline {
-    agent any
+    agent {
+        kubernetes {
+            yaml '''
+                    apiVersion: v1
+                    kind: Pod
+                    spec:
+                    containers:
+                    - name: gcloud-sdk
+                        image: google/cloud-sdk:slim
+                        command:
+                        - cat
+                        tty: true
+                        # The service account has Owner, so it can interact with Dataproc and GCS
+                        serviceAccountName: jenkins 
+                    # This ensures Jenkins can talk to the agent pod
+                    - name: jnlp
+                        image: jenkins/inbound-agent:4.11.2-4
+                        args: ['$(JENKINS_SECRET)', '$(JENKINS_NAME)']
+                '''
+                defaultContainer 'gcloud-sdk'
+        }
+    }
     
     environment {
         GCP_PROJECT_ID = credentials('gcp-project-id')
