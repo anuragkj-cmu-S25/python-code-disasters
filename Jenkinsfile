@@ -1,26 +1,5 @@
 pipeline {
-    agent {
-        kubernetes {
-            yaml '''
-                    apiVersion: v1
-                    kind: Pod
-                    spec:
-                    containers:
-                    - name: gcloud-sdk
-                        image: google/cloud-sdk:slim
-                        command:
-                        - cat
-                        tty: true
-                        # The service account has Owner, so it can interact with Dataproc and GCS
-                        serviceAccountName: jenkins 
-                    # This ensures Jenkins can talk to the agent pod
-                    - name: jnlp
-                        image: jenkins/inbound-agent:4.11.2-4
-                        args: ['$(JENKINS_SECRET)', '$(JENKINS_NAME)']
-                '''
-                defaultContainer 'gcloud-sdk'
-        }
-    }
+    agent any
     
     environment {
         GCP_PROJECT_ID = credentials('gcp-project-id')
@@ -31,6 +10,8 @@ pipeline {
         GCS_BUCKET = "gs://${GCP_PROJECT_ID}-hadoop-output"
         SONAR_SCANNER_VERSION = '4.8.0.2856'
         SONAR_SCANNER_HOME = "${WORKSPACE}/.sonar/sonar-scanner-${SONAR_SCANNER_VERSION}-linux"
+        GCLOUD_HOME = "${WORKSPACE}/.gcloud"
+        PATH = "${WORKSPACE}/.gcloud/google-cloud-sdk/bin:${env.PATH}"
     }
     
     stages {
@@ -45,26 +26,52 @@ pipeline {
             }
         }
         
-        stage('Setup SonarQube Scanner') {
+        stage('Setup Tools') {
             steps {
                 echo '========================================='
-                echo 'Stage 2: Setting up SonarQube Scanner'
+                echo 'Stage 2: Setting up Required Tools'
                 echo '========================================='
                 script {
-                    // Check if scanner already exists, if not download it
+                    // Install SonarQube Scanner
                     sh '''
                         if [ ! -d "${SONAR_SCANNER_HOME}" ]; then
-                            echo "Downloading SonarQube Scanner..."
+                            echo "📥 Downloading SonarQube Scanner ${SONAR_SCANNER_VERSION}..."
                             mkdir -p ${WORKSPACE}/.sonar
                             cd ${WORKSPACE}/.sonar
                             curl -sSLO https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
                             unzip -q sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
                             rm sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
                             chmod +x ${SONAR_SCANNER_HOME}/bin/sonar-scanner
-                            echo "SonarQube Scanner installed successfully"
+                            echo "✅ SonarQube Scanner installed"
                         else
-                            echo "SonarQube Scanner already installed"
+                            echo "✅ SonarQube Scanner already installed"
                         fi
+                    '''
+                    
+                    // Install Google Cloud SDK
+                    sh '''
+                        if [ ! -d "${GCLOUD_HOME}/google-cloud-sdk" ]; then
+                            echo "📥 Downloading Google Cloud SDK..."
+                            mkdir -p ${GCLOUD_HOME}
+                            cd ${GCLOUD_HOME}
+                            curl -sSLO https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz
+                            tar -xzf google-cloud-cli-linux-x86_64.tar.gz
+                            rm google-cloud-cli-linux-x86_64.tar.gz
+                            
+                            # Install silently without prompts
+                            ./google-cloud-sdk/install.sh --quiet --usage-reporting false --path-update false --command-completion false
+                            
+                            # Configure gcloud
+                            ./google-cloud-sdk/bin/gcloud config set project ${GCP_PROJECT_ID}
+                            ./google-cloud-sdk/bin/gcloud config set compute/region ${DATAPROC_REGION}
+                            
+                            echo "✅ Google Cloud SDK installed"
+                        else
+                            echo "✅ Google Cloud SDK already installed"
+                        fi
+                        
+                        # Verify installation
+                        gcloud --version
                     '''
                 }
             }
@@ -155,7 +162,6 @@ Hadoop MapReduce job to count lines in each file of the repository.
 """
 import sys
 import os
-from collections import defaultdict
 
 def mapper():
     """
@@ -233,10 +239,10 @@ EOF
                 echo 'Stage 6: Preparing Repository Files'
                 echo '========================================='
                 script {
-                    // Create a tarball of all Python files
+                    // Create directory with all Python files
                     sh '''
                         mkdir -p hadoop_input
-                        find . -name "*.py" -type f | while read file; do
+                        find . -name "*.py" -type f -not -path "./.sonar/*" -not -path "./.git/*" -not -path "./.gcloud/*" | while read file; do
                             cp "$file" "hadoop_input/"
                         done
                         ls -la hadoop_input/
@@ -244,7 +250,7 @@ EOF
                     
                     // Upload input files to GCS
                     sh """
-                        gcloud storage rm -r ${GCS_BUCKET}/input/ || true
+                        gcloud storage rm -r ${GCS_BUCKET}/input/ 2>/dev/null || true
                         gcloud storage cp -r hadoop_input/* ${GCS_BUCKET}/input/
                         echo "✅ Input files uploaded to ${GCS_BUCKET}/input/"
                     """
@@ -263,7 +269,7 @@ EOF
                 script {
                     // Clean up previous output
                     sh """
-                        gcloud storage rm -r ${GCS_BUCKET}/output/ || true
+                        gcloud storage rm -r ${GCS_BUCKET}/output/ 2>/dev/null || true
                     """
                     
                     // Submit the Hadoop Streaming job
@@ -295,8 +301,8 @@ EOF
                 echo 'Stage 8: Displaying Hadoop Job Results'
                 echo '========================================='
                 script {
-                    // Wait a bit for the job to complete
-                    sleep(time: 10, unit: 'SECONDS')
+                    // Wait for the job to complete
+                    sleep(time: 30, unit: 'SECONDS')
                     
                     // Fetch and display results
                     sh """
@@ -304,7 +310,7 @@ EOF
                         echo "========================================="
                         echo "HADOOP JOB RESULTS - LINE COUNT PER FILE"
                         echo "========================================="
-                        gcloud storage cat ${GCS_BUCKET}/output/part-* || echo "Results not ready yet, check GCS bucket manually"
+                        gcloud storage cat ${GCS_BUCKET}/output/part-* 2>/dev/null || echo "⚠️  Results not ready yet, check GCS bucket manually"
                         echo ""
                         echo "========================================="
                         echo "Results also available at:"
