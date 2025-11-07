@@ -264,7 +264,7 @@ EOF
                         gcloud storage rm -r ${GCS_BUCKET}/input/ 2>/dev/null || true
                         gcloud storage cp -r hadoop_input/* ${GCS_BUCKET}/input/
                         echo "✅ Input files uploaded to ${GCS_BUCKET}/input/"
-                    '''
+                    """
                 }
             }
         }
