@@ -90,6 +90,7 @@ pipeline {
                         ${SONAR_SCANNER_HOME}/bin/sonar-scanner \
                             -Dsonar.projectKey=python-code-disasters \
                             -Dsonar.sources=. \
+                            -Dsonar.exclusions=**/.gcloud/**,**/.sonar/**,**/hadoop_input/** \
                             -Dsonar.host.url=${SONARQUBE_URL} \
                             -Dsonar.login=${SONAR_TOKEN} \
                             -Dsonar.python.version=3
