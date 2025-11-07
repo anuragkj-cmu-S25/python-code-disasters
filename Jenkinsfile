@@ -10,10 +10,6 @@ pipeline {
         GCS_BUCKET = "gs://${GCP_PROJECT_ID}-hadoop-output"
         SONAR_SCANNER_VERSION = '4.8.0.2856'
         SONAR_SCANNER_HOME = "${WORKSPACE}/.sonar/sonar-scanner-${SONAR_SCANNER_VERSION}-linux"
-        GCLOUD_HOME = "${WORKSPACE}/.gcloud"
-        PATH = "${WORKSPACE}/.gcloud/google-cloud-sdk/bin:${PATH}"
-        CLOUDSDK_PYTHON = "python3"
-        CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE = "/var/secrets/gcp/key.json"
     }
     
     stages {
@@ -28,63 +24,10 @@ pipeline {
             }
         }
         
-        stage('Setup Google Cloud SDK') {
-            steps {
-                echo '========================================='
-                echo 'Stage 2: Setting up Google Cloud SDK'
-                echo '========================================='
-                script {
-                    sh '''
-                        # Install Python 3 if not available
-                        if ! command -v python3 &> /dev/null; then
-                            echo "Installing Python 3..."
-                            apt-get update -qq
-                            apt-get install -y -qq python3 python3-pip > /dev/null
-                            echo "Python 3 installed successfully"
-                        else
-                            echo "Python 3 is already available"
-                        fi
-                        
-                        # Verify Python 3
-                        python3 --version
-                        
-                        if [ ! -d "${GCLOUD_HOME}/google-cloud-sdk" ]; then
-                            echo "Installing Google Cloud SDK..."
-                            mkdir -p ${GCLOUD_HOME}
-                            cd ${GCLOUD_HOME}
-                            
-                            # Download pre-built gcloud SDK tarball (Python 3 compatible)
-                            curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-502.0.0-linux-x86_64.tar.gz
-                            tar -xzf google-cloud-cli-502.0.0-linux-x86_64.tar.gz
-                            rm google-cloud-cli-502.0.0-linux-x86_64.tar.gz
-                            
-                            # Set Python 3 explicitly
-                            export CLOUDSDK_PYTHON=python3
-                            ./google-cloud-sdk/install.sh --usage-reporting=false --path-update=false --quiet
-                            
-                            echo "Google Cloud SDK installed successfully"
-                        else
-                            echo "Google Cloud SDK already installed"
-                        fi
-                        
-                        # Set Python 3 for gcloud
-                        export CLOUDSDK_PYTHON=python3
-                        
-                        # Verify installation
-                        gcloud version
-                        
-                        # Configure authentication
-                        gcloud config set project ${GCP_PROJECT_ID}
-                        echo "Authenticated with GCP project: ${GCP_PROJECT_ID}"
-                    '''
-                }
-            }
-        }
-        
         stage('Setup SonarQube Scanner') {
             steps {
                 echo '========================================='
-                echo 'Stage 3: Setting up SonarQube Scanner'
+                echo 'Stage 2: Setting up SonarQube Scanner'
                 echo '========================================='
                 script {
                     // Check if scanner already exists, if not download it
@@ -109,14 +52,13 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 echo '========================================='
-                echo 'Stage 4: Running SonarQube Analysis'
+                echo 'Stage 3: Running SonarQube Analysis'
                 echo '========================================='
                 script {
                     sh """
                         ${SONAR_SCANNER_HOME}/bin/sonar-scanner \
                             -Dsonar.projectKey=python-code-disasters \
                             -Dsonar.sources=. \
-                            -Dsonar.exclusions=**/.gcloud/**,**/.sonar/**,**/hadoop_input/** \
                             -Dsonar.host.url=${SONARQUBE_URL} \
                             -Dsonar.login=${SONAR_TOKEN} \
                             -Dsonar.python.version=3
@@ -128,7 +70,7 @@ pipeline {
         stage('Quality Gate Check') {
             steps {
                 echo '========================================='
-                echo 'Stage 5: Checking Quality Gate Status'
+                echo 'Stage 4: Checking Quality Gate Status'
                 echo '========================================='
                 script {
                     // Wait for SonarQube to process the analysis
@@ -180,7 +122,7 @@ pipeline {
             }
             steps {
                 echo '========================================='
-                echo 'Stage 6: Uploading MapReduce Job to GCS'
+                echo 'Stage 5: Uploading MapReduce Job to GCS'
                 echo '========================================='
                 script {
                     // Create the MapReduce Python script
@@ -267,7 +209,7 @@ EOF
             }
             steps {
                 echo '========================================='
-                echo 'Stage 7: Preparing Repository Files'
+                echo 'Stage 6: Preparing Repository Files'
                 echo '========================================='
                 script {
                     // Create a tarball of all Python files
@@ -295,7 +237,7 @@ EOF
             }
             steps {
                 echo '========================================='
-                echo 'Stage 8: Running Hadoop MapReduce Job'
+                echo 'Stage 7: Running Hadoop MapReduce Job'
                 echo '========================================='
                 script {
                     // Clean up previous output
@@ -329,7 +271,7 @@ EOF
             }
             steps {
                 echo '========================================='
-                echo 'Stage 9: Displaying Hadoop Job Results'
+                echo 'Stage 8: Displaying Hadoop Job Results'
                 echo '========================================='
                 script {
                     // Wait a bit for the job to complete
