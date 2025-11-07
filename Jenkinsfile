@@ -280,11 +280,11 @@ EOF
                             --class=org.apache.hadoop.streaming.HadoopStreaming \
                             --jars=file:///usr/lib/hadoop-mapreduce/hadoop-streaming.jar \
                             -- \
+                            -files ${GCS_BUCKET}/scripts/line_counter.py \
                             -input ${GCS_BUCKET}/input/* \
                             -output ${GCS_BUCKET}/output \
-                            -mapper "${GCS_BUCKET}/scripts/line_counter.py" \
-                            -reducer "${GCS_BUCKET}/scripts/line_counter.py reduce" \
-                            -file ${GCS_BUCKET}/scripts/line_counter.py
+                            -mapper "python3 line_counter.py" \
+                            -reducer "python3 line_counter.py reduce"
                     """
                     
                     echo "✅ Hadoop job submitted successfully!"
