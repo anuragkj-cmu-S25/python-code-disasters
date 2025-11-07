@@ -1,13 +1,13 @@
 #infinite recursion
-def infinite_recursion(counter):
-    """
-    This function calls itself without a base case to stop the recursion.
-    This will lead to a RecursionError (stack overflow).
-    SonarQube identifies this pattern as a Blocker.
-    Rule ID: python:S3642 - "Recursive functions should not call themselves unconditionally."
-    """
-    print(f"Recursion depth: {counter}")
-    infinite_recursion(counter + 1)
+# def infinite_recursion(counter):
+#     """
+#     This function calls itself without a base case to stop the recursion.
+#     This will lead to a RecursionError (stack overflow).
+#     SonarQube identifies this pattern as a Blocker.
+#     Rule ID: python:S3642 - "Recursive functions should not call themselves unconditionally."
+#     """
+#     print(f"Recursion depth: {counter}")
+#     infinite_recursion(counter + 1)
     
 
 def process_offers(offer, counter_general, counter, counter_update, counter_switched_back):
