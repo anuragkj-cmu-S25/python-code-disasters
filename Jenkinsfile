@@ -12,6 +12,7 @@ pipeline {
         SONAR_SCANNER_HOME = "${WORKSPACE}/.sonar/sonar-scanner-${SONAR_SCANNER_VERSION}-linux"
         GCLOUD_HOME = "${WORKSPACE}/.gcloud"
         PATH = "${WORKSPACE}/.gcloud/google-cloud-sdk/bin:${PATH}"
+        CLOUDSDK_PYTHON = "python3"
         CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE = "/var/secrets/gcp/key.json"
     }
     
@@ -38,11 +39,23 @@ pipeline {
                             echo "Installing Google Cloud SDK..."
                             mkdir -p ${GCLOUD_HOME}
                             cd ${GCLOUD_HOME}
-                            curl -sSL https://sdk.cloud.google.com | bash -s -- --disable-prompts --install-dir=${GCLOUD_HOME}
+                            
+                            # Download pre-built gcloud SDK tarball (Python 3 compatible)
+                            curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-502.0.0-linux-x86_64.tar.gz
+                            tar -xzf google-cloud-cli-502.0.0-linux-x86_64.tar.gz
+                            rm google-cloud-cli-502.0.0-linux-x86_64.tar.gz
+                            
+                            # Set Python 3 explicitly
+                            export CLOUDSDK_PYTHON=python3
+                            ./google-cloud-sdk/install.sh --usage-reporting=false --path-update=false --quiet
+                            
                             echo "Google Cloud SDK installed successfully"
                         else
                             echo "Google Cloud SDK already installed"
                         fi
+                        
+                        # Set Python 3 for gcloud
+                        export CLOUDSDK_PYTHON=python3
                         
                         # Verify installation
                         gcloud version
