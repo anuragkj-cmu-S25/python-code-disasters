@@ -24,33 +24,10 @@ pipeline {
             }
         }
         
-        stage('Setup Google Cloud CLI') {
-            steps {
-                echo '========================================='
-                echo 'Stage 2: Setting up Google Cloud CLI'
-                echo '========================================='
-                script {
-                    sh '''
-                        if ! command -v gcloud &> /dev/null; then
-                            echo "Installing Google Cloud CLI..."
-                            curl -sSL https://sdk.cloud.google.com | bash
-                            export PATH="$HOME/google-cloud-sdk/bin:$PATH"
-                            gcloud --version
-                        else
-                            echo "Google Cloud CLI already installed"
-                            gcloud --version
-                        fi
-                    '''
-                    // Add gcloud to PATH for subsequent stages
-                    env.PATH = "${env.HOME}/google-cloud-sdk/bin:${env.PATH}"
-                }
-            }
-        }
-        
         stage('Setup SonarQube Scanner') {
             steps {
                 echo '========================================='
-                echo 'Stage 3: Setting up SonarQube Scanner'
+                echo 'Stage 2: Setting up SonarQube Scanner'
                 echo '========================================='
                 script {
                     // Check if scanner already exists, if not download it
@@ -75,7 +52,7 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 echo '========================================='
-                echo 'Stage 4: Running SonarQube Analysis'
+                echo 'Stage 3: Running SonarQube Analysis'
                 echo '========================================='
                 script {
                     sh """
@@ -93,7 +70,7 @@ pipeline {
         stage('Quality Gate Check') {
             steps {
                 echo '========================================='
-                echo 'Stage 5: Checking Quality Gate Status'
+                echo 'Stage 4: Checking Quality Gate Status'
                 echo '========================================='
                 script {
                     // Wait for SonarQube to process the analysis
@@ -145,7 +122,7 @@ pipeline {
             }
             steps {
                 echo '========================================='
-                echo 'Stage 6: Uploading MapReduce Job to GCS'
+                echo 'Stage 5: Uploading MapReduce Job to GCS'
                 echo '========================================='
                 script {
                     // Create the MapReduce Python script
@@ -218,12 +195,10 @@ EOF
                     '''
                     
                     // Upload to GCS
-                    withEnv(["GCS_BUCKET=${GCS_BUCKET}"]) {
-                        sh '''
-                            gcloud storage cp line_counter.py ${GCS_BUCKET}/scripts/
-                            echo "✅ MapReduce job uploaded to GCS"
-                        '''
-                    }
+                    sh """
+                        gcloud storage cp line_counter.py ${GCS_BUCKET}/scripts/
+                        echo "✅ MapReduce job uploaded to GCS"
+                    """
                 }
             }
         }
@@ -234,7 +209,7 @@ EOF
             }
             steps {
                 echo '========================================='
-                echo 'Stage 7: Preparing Repository Files'
+                echo 'Stage 6: Preparing Repository Files'
                 echo '========================================='
                 script {
                     // Create a tarball of all Python files
@@ -247,13 +222,11 @@ EOF
                     '''
                     
                     // Upload input files to GCS
-                    withEnv(["GCS_BUCKET=${GCS_BUCKET}"]) {
-                        sh '''
-                            gcloud storage rm -r ${GCS_BUCKET}/input/ || true
-                            gcloud storage cp -r hadoop_input/* ${GCS_BUCKET}/input/
-                            echo "✅ Input files uploaded to ${GCS_BUCKET}/input/"
-                        '''
-                    }
+                    sh """
+                        gcloud storage rm -r ${GCS_BUCKET}/input/ || true
+                        gcloud storage cp -r hadoop_input/* ${GCS_BUCKET}/input/
+                        echo "✅ Input files uploaded to ${GCS_BUCKET}/input/"
+                    """
                 }
             }
         }
@@ -264,32 +237,30 @@ EOF
             }
             steps {
                 echo '========================================='
-                echo 'Stage 8: Running Hadoop MapReduce Job'
+                echo 'Stage 7: Running Hadoop MapReduce Job'
                 echo '========================================='
                 script {
-                    withEnv(["GCS_BUCKET=${GCS_BUCKET}", "DATAPROC_CLUSTER=${DATAPROC_CLUSTER}", "DATAPROC_REGION=${DATAPROC_REGION}"]) {
-                        // Clean up previous output
-                        sh '''
-                            gcloud storage rm -r ${GCS_BUCKET}/output/ || true
-                        '''
-                        
-                        // Submit the Hadoop Streaming job
-                        sh '''
-                            gcloud dataproc jobs submit hadoop \
-                                --cluster=${DATAPROC_CLUSTER} \
-                                --region=${DATAPROC_REGION} \
-                                --class=org.apache.hadoop.streaming.HadoopStreaming \
-                                --jars=file:///usr/lib/hadoop-mapreduce/hadoop-streaming.jar \
-                                -- \
-                                -input ${GCS_BUCKET}/input/* \
-                                -output ${GCS_BUCKET}/output \
-                                -mapper "${GCS_BUCKET}/scripts/line_counter.py" \
-                                -reducer "${GCS_BUCKET}/scripts/line_counter.py reduce" \
-                                -file ${GCS_BUCKET}/scripts/line_counter.py
-                        '''
-                        
-                        echo "✅ Hadoop job submitted successfully!"
-                    }
+                    // Clean up previous output
+                    sh """
+                        gcloud storage rm -r ${GCS_BUCKET}/output/ || true
+                    """
+                    
+                    // Submit the Hadoop Streaming job
+                    sh """
+                        gcloud dataproc jobs submit hadoop \
+                            --cluster=${DATAPROC_CLUSTER} \
+                            --region=${DATAPROC_REGION} \
+                            --class=org.apache.hadoop.streaming.HadoopStreaming \
+                            --jars=file:///usr/lib/hadoop-mapreduce/hadoop-streaming.jar \
+                            -- \
+                            -input ${GCS_BUCKET}/input/* \
+                            -output ${GCS_BUCKET}/output \
+                            -mapper "${GCS_BUCKET}/scripts/line_counter.py" \
+                            -reducer "${GCS_BUCKET}/scripts/line_counter.py reduce" \
+                            -file ${GCS_BUCKET}/scripts/line_counter.py
+                    """
+                    
+                    echo "✅ Hadoop job submitted successfully!"
                 }
             }
         }
@@ -300,27 +271,25 @@ EOF
             }
             steps {
                 echo '========================================='
-                echo 'Stage 9: Displaying Hadoop Job Results'
+                echo 'Stage 8: Displaying Hadoop Job Results'
                 echo '========================================='
                 script {
                     // Wait a bit for the job to complete
                     sleep(time: 10, unit: 'SECONDS')
                     
                     // Fetch and display results
-                    withEnv(["GCS_BUCKET=${GCS_BUCKET}"]) {
-                        sh '''
-                            echo ""
-                            echo "========================================="
-                            echo "HADOOP JOB RESULTS - LINE COUNT PER FILE"
-                            echo "========================================="
-                            gcloud storage cat ${GCS_BUCKET}/output/part-* || echo "Results not ready yet, check GCS bucket manually"
-                            echo ""
-                            echo "========================================="
-                            echo "Results also available at:"
-                            echo "${GCS_BUCKET}/output/"
-                            echo "========================================="
-                        '''
-                    }
+                    sh """
+                        echo ""
+                        echo "========================================="
+                        echo "HADOOP JOB RESULTS - LINE COUNT PER FILE"
+                        echo "========================================="
+                        gcloud storage cat ${GCS_BUCKET}/output/part-* || echo "Results not ready yet, check GCS bucket manually"
+                        echo ""
+                        echo "========================================="
+                        echo "Results also available at:"
+                        echo "${GCS_BUCKET}/output/"
+                        echo "========================================="
+                    """
                 }
             }
         }
@@ -338,7 +307,7 @@ EOF
                 } else if (env.RUN_HADOOP == 'true') {
                     echo "✅ Pipeline completed successfully"
                     echo "✅ Hadoop job executed and results available"
-                    echo "📊 View results: gs://${GCP_PROJECT_ID}-hadoop-output/output/"
+                    echo "📊 View results: ${GCS_BUCKET}/output/"
                 } else {
                     echo "⚠️  Pipeline completed with warnings"
                 }
