@@ -8,7 +8,8 @@ pipeline {
         DATAPROC_CLUSTER = 'hadoop-cluster'
         DATAPROC_REGION = 'us-central1'
         GCS_BUCKET = "gs://${GCP_PROJECT_ID}-hadoop-output"
-        SONAR_SCANNER_VERSION = '4.8.0.2856'
+        // Use 4.7.0 which is compatible with Java 11
+        SONAR_SCANNER_VERSION = '4.7.0.2747'
         SONAR_SCANNER_HOME = "${WORKSPACE}/.sonar/sonar-scanner-${SONAR_SCANNER_VERSION}-linux"
     }
     
@@ -33,16 +34,16 @@ pipeline {
                     // Check if scanner already exists, if not download it
                     sh '''
                         if [ ! -d "${SONAR_SCANNER_HOME}" ]; then
-                            echo "Downloading SonarQube Scanner..."
+                            echo "Downloading SonarQube Scanner ${SONAR_SCANNER_VERSION} (Java 11 compatible)..."
                             mkdir -p ${WORKSPACE}/.sonar
                             cd ${WORKSPACE}/.sonar
                             curl -sSLO https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
                             unzip -q sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
                             rm sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
                             chmod +x ${SONAR_SCANNER_HOME}/bin/sonar-scanner
-                            echo "SonarQube Scanner installed successfully"
+                            echo "✅ SonarQube Scanner installed successfully"
                         else
-                            echo "SonarQube Scanner already installed"
+                            echo "✅ SonarQube Scanner already installed"
                         fi
                     '''
                 }
