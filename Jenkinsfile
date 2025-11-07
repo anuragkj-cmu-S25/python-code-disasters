@@ -35,6 +35,19 @@ pipeline {
                 echo '========================================='
                 script {
                     sh '''
+                        # Install Python 3 if not available
+                        if ! command -v python3 &> /dev/null; then
+                            echo "Installing Python 3..."
+                            apt-get update -qq
+                            apt-get install -y -qq python3 python3-pip > /dev/null
+                            echo "Python 3 installed successfully"
+                        else
+                            echo "Python 3 is already available"
+                        fi
+                        
+                        # Verify Python 3
+                        python3 --version
+                        
                         if [ ! -d "${GCLOUD_HOME}/google-cloud-sdk" ]; then
                             echo "Installing Google Cloud SDK..."
                             mkdir -p ${GCLOUD_HOME}
