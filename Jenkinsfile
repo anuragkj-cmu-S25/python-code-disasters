@@ -10,6 +10,9 @@ pipeline {
         GCS_BUCKET = "gs://${GCP_PROJECT_ID}-hadoop-output"
         SONAR_SCANNER_VERSION = '4.8.0.2856'
         SONAR_SCANNER_HOME = "${WORKSPACE}/.sonar/sonar-scanner-${SONAR_SCANNER_VERSION}-linux"
+        GCLOUD_HOME = "${WORKSPACE}/.gcloud"
+        PATH = "${WORKSPACE}/.gcloud/google-cloud-sdk/bin:${PATH}"
+        CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE = "/var/secrets/gcp/key.json"
     }
     
     stages {
@@ -24,10 +27,38 @@ pipeline {
             }
         }
         
+        stage('Setup Google Cloud SDK') {
+            steps {
+                echo '========================================='
+                echo 'Stage 2: Setting up Google Cloud SDK'
+                echo '========================================='
+                script {
+                    sh '''
+                        if [ ! -d "${GCLOUD_HOME}/google-cloud-sdk" ]; then
+                            echo "Installing Google Cloud SDK..."
+                            mkdir -p ${GCLOUD_HOME}
+                            cd ${GCLOUD_HOME}
+                            curl -sSL https://sdk.cloud.google.com | bash -s -- --disable-prompts --install-dir=${GCLOUD_HOME}
+                            echo "Google Cloud SDK installed successfully"
+                        else
+                            echo "Google Cloud SDK already installed"
+                        fi
+                        
+                        # Verify installation
+                        gcloud version
+                        
+                        # Configure authentication
+                        gcloud config set project ${GCP_PROJECT_ID}
+                        echo "Authenticated with GCP project: ${GCP_PROJECT_ID}"
+                    '''
+                }
+            }
+        }
+        
         stage('Setup SonarQube Scanner') {
             steps {
                 echo '========================================='
-                echo 'Stage 2: Setting up SonarQube Scanner'
+                echo 'Stage 3: Setting up SonarQube Scanner'
                 echo '========================================='
                 script {
                     // Check if scanner already exists, if not download it
@@ -52,7 +83,7 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 echo '========================================='
-                echo 'Stage 3: Running SonarQube Analysis'
+                echo 'Stage 4: Running SonarQube Analysis'
                 echo '========================================='
                 script {
                     sh """
@@ -70,7 +101,7 @@ pipeline {
         stage('Quality Gate Check') {
             steps {
                 echo '========================================='
-                echo 'Stage 4: Checking Quality Gate Status'
+                echo 'Stage 5: Checking Quality Gate Status'
                 echo '========================================='
                 script {
                     // Wait for SonarQube to process the analysis
@@ -122,7 +153,7 @@ pipeline {
             }
             steps {
                 echo '========================================='
-                echo 'Stage 5: Uploading MapReduce Job to GCS'
+                echo 'Stage 6: Uploading MapReduce Job to GCS'
                 echo '========================================='
                 script {
                     // Create the MapReduce Python script
@@ -209,7 +240,7 @@ EOF
             }
             steps {
                 echo '========================================='
-                echo 'Stage 6: Preparing Repository Files'
+                echo 'Stage 7: Preparing Repository Files'
                 echo '========================================='
                 script {
                     // Create a tarball of all Python files
@@ -237,7 +268,7 @@ EOF
             }
             steps {
                 echo '========================================='
-                echo 'Stage 7: Running Hadoop MapReduce Job'
+                echo 'Stage 8: Running Hadoop MapReduce Job'
                 echo '========================================='
                 script {
                     // Clean up previous output
@@ -271,7 +302,7 @@ EOF
             }
             steps {
                 echo '========================================='
-                echo 'Stage 8: Displaying Hadoop Job Results'
+                echo 'Stage 9: Displaying Hadoop Job Results'
                 echo '========================================='
                 script {
                     // Wait a bit for the job to complete
