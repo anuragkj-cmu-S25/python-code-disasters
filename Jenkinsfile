@@ -2,131 +2,265 @@ pipeline {
     agent any
     
     environment {
-        GITHUB_REPO = 'https://github.com/anuragkj-cmu-S25/python-code-disasters'
-        SONAR_PROJECT_KEY = 'python-code-disasters'
-        GCP_PROJECT = credentials('gcp-project-id')
+        GCP_PROJECT_ID = credentials('gcp-project-id')
+        SONAR_TOKEN = credentials('sonar-token')
+        SONARQUBE_URL = 'http://sonarqube-sonarqube.sonarqube.svc.cluster.local:9000'
         DATAPROC_CLUSTER = 'hadoop-cluster'
         DATAPROC_REGION = 'us-central1'
-        DATAPROC_ZONE = 'us-central1-a'
-        OUTPUT_BUCKET = "${GCP_PROJECT}-hadoop-output"
-        RUN_HADOOP = 'false'
+        GCS_BUCKET = "gs://${GCP_PROJECT_ID}-hadoop-output"
+        SONAR_SCANNER_VERSION = '4.8.0.2856'
+        SONAR_SCANNER_HOME = "${WORKSPACE}/.sonar/sonar-scanner-${SONAR_SCANNER_VERSION}-linux"
     }
     
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'main', 
-                    url: "${GITHUB_REPO}",
-                    credentialsId: 'github-credentials'
+                echo '========================================='
+                echo 'Stage 1: Checking out code from GitHub'
+                echo '========================================='
+                checkout scm
+                sh 'ls -la'
+                sh 'pwd'
+            }
+        }
+        
+        stage('Setup SonarQube Scanner') {
+            steps {
+                echo '========================================='
+                echo 'Stage 2: Setting up SonarQube Scanner'
+                echo '========================================='
+                script {
+                    // Check if scanner already exists, if not download it
+                    sh '''
+                        if [ ! -d "${SONAR_SCANNER_HOME}" ]; then
+                            echo "Downloading SonarQube Scanner..."
+                            mkdir -p ${WORKSPACE}/.sonar
+                            cd ${WORKSPACE}/.sonar
+                            wget -q https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
+                            unzip -q sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
+                            rm sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
+                            chmod +x ${SONAR_SCANNER_HOME}/bin/sonar-scanner
+                            echo "SonarQube Scanner installed successfully"
+                        else
+                            echo "SonarQube Scanner already installed"
+                        fi
+                    '''
+                }
             }
         }
         
         stage('SonarQube Analysis') {
             steps {
+                echo '========================================='
+                echo 'Stage 3: Running SonarQube Analysis'
+                echo '========================================='
                 script {
-                    def scannerHome = tool 'SonarQubeScanner'
-                    withSonarQubeEnv('SonarQube') {
-                        sh """
-                            ${scannerHome}/bin/sonar-scanner \
-                                -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                                -Dsonar.sources=. \
-                                -Dsonar.python.version=3
-                        """
-                    }
+                    sh """
+                        ${SONAR_SCANNER_HOME}/bin/sonar-scanner \
+                            -Dsonar.projectKey=python-code-disasters \
+                            -Dsonar.sources=. \
+                            -Dsonar.host.url=${SONARQUBE_URL} \
+                            -Dsonar.login=${SONAR_TOKEN} \
+                            -Dsonar.python.version=3
+                    """
                 }
             }
         }
         
-        stage('Quality Gate') {
+        stage('Quality Gate Check') {
             steps {
-                timeout(time: 5, unit: 'MINUTES') {
-                    script {
-                        def qg = waitForQualityGate()
-                        echo "Quality Gate Status: ${qg.status}"
-                    }
-                }
-            }
-        }
-        
-        stage('Check for Blockers') {
-            steps {
+                echo '========================================='
+                echo 'Stage 4: Checking Quality Gate Status'
+                echo '========================================='
                 script {
-                    // Query SonarQube for blocker issues
-                    def sonarUrl = "http://sonarqube-sonarqube.sonarqube.svc.cluster.local:9000"
-                    def token = credentials('sonar-token')
+                    // Wait for SonarQube to process the analysis
+                    sleep(time: 30, unit: 'SECONDS')
                     
-                    def response = sh(
+                    // Get quality gate status
+                    def qualityGate = sh(
                         script: """
-                            curl -s -u ${token}: \
-                            "${sonarUrl}/api/issues/search?componentKeys=${SONAR_PROJECT_KEY}&severities=BLOCKER&resolved=false"
+                            curl -s -u ${SONAR_TOKEN}: \
+                            '${SONARQUBE_URL}/api/qualitygates/project_status?projectKey=python-code-disasters' \
+                            | grep -o '"status":"[^"]*"' | cut -d'"' -f4
                         """,
                         returnStdout: true
                     ).trim()
                     
-                    // Parse blocker count
+                    echo "Quality Gate Status: ${qualityGate}"
+                    
+                    // Get blocker issues count
                     def blockerCount = sh(
-                        script: "echo '${response}' | grep -o '\"total\":[0-9]*' | head -1 | cut -d':' -f2 || echo '0'",
+                        script: """
+                            curl -s -u ${SONAR_TOKEN}: \
+                            '${SONARQUBE_URL}/api/issues/search?componentKeys=python-code-disasters&severities=BLOCKER&resolved=false' \
+                            | grep -o '"total":[0-9]*' | head -1 | cut -d':' -f2
+                        """,
                         returnStdout: true
-                    ).trim().toInteger()
+                    ).trim()
                     
-                    echo "======================================"
-                    echo "BLOCKER ISSUES FOUND: ${blockerCount}"
-                    echo "======================================"
+                    echo "Blocker Issues Count: ${blockerCount}"
                     
-                    if (blockerCount > 0) {
-                        echo "❌ BLOCKERS DETECTED! Skipping Hadoop job."
+                    // Store blocker count for next stage
+                    env.BLOCKER_COUNT = blockerCount
+                    
+                    if (blockerCount.toInteger() > 0) {
+                        echo "⚠️  WARNING: Found ${blockerCount} blocker issue(s)!"
+                        echo "❌ Hadoop job will NOT be executed due to blocker issues."
                         env.RUN_HADOOP = 'false'
                     } else {
-                        echo "✅ NO BLOCKERS! Proceeding with Hadoop job."
+                        echo "✅ SUCCESS: No blocker issues found!"
+                        echo "✅ Hadoop job will be executed."
                         env.RUN_HADOOP = 'true'
                     }
                 }
             }
         }
         
-        stage('Run Hadoop Job') {
+        stage('Upload MapReduce Job to GCS') {
             when {
                 expression { env.RUN_HADOOP == 'true' }
             }
             steps {
+                echo '========================================='
+                echo 'Stage 5: Uploading MapReduce Job to GCS'
+                echo '========================================='
                 script {
-                    echo "======================================"
-                    echo "Submitting job to Hadoop cluster..."
-                    echo "======================================"
+                    // Create the MapReduce Python script
+                    sh '''
+                        cat > line_counter.py << 'EOF'
+#!/usr/bin/env python3
+"""
+Hadoop MapReduce job to count lines in each file of the repository.
+"""
+import sys
+import os
+from collections import defaultdict
+
+def mapper():
+    """
+    Mapper: Read from stdin and emit (filename, 1) for each line
+    """
+    current_file = os.environ.get('mapreduce_map_input_file', 'unknown')
+    # Extract just the filename from the full path
+    filename = current_file.split('/')[-1] if '/' in current_file else current_file
+    
+    for line in sys.stdin:
+        # Emit filename and count of 1 for each line
+        print(f"{filename}\\t1")
+
+def reducer():
+    """
+    Reducer: Sum up line counts for each file
+    """
+    current_file = None
+    current_count = 0
+    
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+            
+        parts = line.split('\\t')
+        if len(parts) != 2:
+            continue
+            
+        filename, count = parts
+        
+        try:
+            count = int(count)
+        except ValueError:
+            continue
+        
+        if current_file == filename:
+            current_count += count
+        else:
+            if current_file is not None:
+                # Output the result
+                print(f'"{current_file}": {current_count} lines')
+            current_file = filename
+            current_count = count
+    
+    # Output the last file
+    if current_file is not None:
+        print(f'"{current_file}": {current_count} lines')
+
+if __name__ == '__main__':
+    # Determine if we're running as mapper or reducer
+    if len(sys.argv) > 1 and sys.argv[1] == 'reduce':
+        reducer()
+    else:
+        mapper()
+EOF
+                        chmod +x line_counter.py
+                    '''
                     
-                    // SSH to Dataproc master and run line counting
+                    // Upload to GCS
                     sh """
-                        gcloud compute ssh hadoop-cluster-m \
-                            --zone=${DATAPROC_ZONE} \
-                            --project=${GCP_PROJECT} \
-                            --command="
-                                # Clone repo
-                                cd /tmp
-                                rm -rf python-code-disasters
-                                git clone ${GITHUB_REPO}
-                                cd python-code-disasters
-                                
-                                # Count lines
-                                OUTPUT_FILE=/tmp/line_counts_\$(date +%Y%m%d_%H%M%S).txt
-                                echo 'File Line Counts:' > \$OUTPUT_FILE
-                                echo '==================' >> \$OUTPUT_FILE
-                                
-                                find . -name '*.py' -type f | while read file; do
-                                    filename=\$(basename \"\$file\")
-                                    linecount=\$(wc -l < \"\$file\")
-                                    echo '\"\$filename\": '\$linecount >> \$OUTPUT_FILE
-                                done
-                                
-                                # Upload to GCS
-                                gsutil cp \$OUTPUT_FILE gs://${OUTPUT_BUCKET}/
-                                
-                                # Display results
-                                echo ''
-                                echo 'Results uploaded to: gs://${OUTPUT_BUCKET}/'\$(basename \$OUTPUT_FILE)
-                                echo ''
-                                cat \$OUTPUT_FILE
-                            "
+                        gcloud storage cp line_counter.py ${GCS_BUCKET}/scripts/
+                        echo "✅ MapReduce job uploaded to GCS"
                     """
+                }
+            }
+        }
+        
+        stage('Prepare Repository for Hadoop') {
+            when {
+                expression { env.RUN_HADOOP == 'true' }
+            }
+            steps {
+                echo '========================================='
+                echo 'Stage 6: Preparing Repository Files'
+                echo '========================================='
+                script {
+                    // Create a tarball of all Python files
+                    sh '''
+                        mkdir -p hadoop_input
+                        find . -name "*.py" -type f | while read file; do
+                            cp "$file" "hadoop_input/"
+                        done
+                        ls -la hadoop_input/
+                    '''
+                    
+                    // Upload input files to GCS
+                    sh """
+                        gcloud storage rm -r ${GCS_BUCKET}/input/ || true
+                        gcloud storage cp -r hadoop_input/* ${GCS_BUCKET}/input/
+                        echo "✅ Input files uploaded to ${GCS_BUCKET}/input/"
+                    """
+                }
+            }
+        }
+        
+        stage('Run Hadoop MapReduce Job') {
+            when {
+                expression { env.RUN_HADOOP == 'true' }
+            }
+            steps {
+                echo '========================================='
+                echo 'Stage 7: Running Hadoop MapReduce Job'
+                echo '========================================='
+                script {
+                    // Clean up previous output
+                    sh """
+                        gcloud storage rm -r ${GCS_BUCKET}/output/ || true
+                    """
+                    
+                    // Submit the Hadoop Streaming job
+                    sh """
+                        gcloud dataproc jobs submit hadoop \
+                            --cluster=${DATAPROC_CLUSTER} \
+                            --region=${DATAPROC_REGION} \
+                            --class=org.apache.hadoop.streaming.HadoopStreaming \
+                            --jars=file:///usr/lib/hadoop-mapreduce/hadoop-streaming.jar \
+                            -- \
+                            -input ${GCS_BUCKET}/input/* \
+                            -output ${GCS_BUCKET}/output \
+                            -mapper "${GCS_BUCKET}/scripts/line_counter.py" \
+                            -reducer "${GCS_BUCKET}/scripts/line_counter.py reduce" \
+                            -file ${GCS_BUCKET}/scripts/line_counter.py
+                    """
+                    
+                    echo "✅ Hadoop job submitted successfully!"
                 }
             }
         }
@@ -136,36 +270,54 @@ pipeline {
                 expression { env.RUN_HADOOP == 'true' }
             }
             steps {
+                echo '========================================='
+                echo 'Stage 8: Displaying Hadoop Job Results'
+                echo '========================================='
                 script {
-                    echo "======================================"
-                    echo "HADOOP JOB RESULTS"
-                    echo "======================================"
+                    // Wait a bit for the job to complete
+                    sleep(time: 10, unit: 'SECONDS')
                     
-                    // Get latest results from GCS
+                    // Fetch and display results
                     sh """
-                        LATEST_FILE=\$(gsutil ls gs://${OUTPUT_BUCKET}/line_counts_* | tail -1)
-                        echo "Latest results file: \$LATEST_FILE"
                         echo ""
-                        gsutil cat \$LATEST_FILE
+                        echo "========================================="
+                        echo "HADOOP JOB RESULTS - LINE COUNT PER FILE"
+                        echo "========================================="
+                        gcloud storage cat ${GCS_BUCKET}/output/part-* || echo "Results not ready yet, check GCS bucket manually"
+                        echo ""
+                        echo "========================================="
+                        echo "Results also available at:"
+                        echo "${GCS_BUCKET}/output/"
+                        echo "========================================="
                     """
-                    
-                    echo "======================================"
-                    echo "Results available in GCS bucket: ${OUTPUT_BUCKET}"
-                    echo "======================================"
                 }
             }
         }
     }
     
     post {
+        always {
+            echo '========================================='
+            echo 'Pipeline Execution Complete'
+            echo '========================================='
+            script {
+                if (env.BLOCKER_COUNT?.toInteger() > 0) {
+                    echo "❌ Pipeline completed with ${env.BLOCKER_COUNT} blocker issues"
+                    echo "❌ Hadoop job was NOT executed"
+                } else if (env.RUN_HADOOP == 'true') {
+                    echo "✅ Pipeline completed successfully"
+                    echo "✅ Hadoop job executed and results available"
+                    echo "📊 View results: ${GCS_BUCKET}/output/"
+                } else {
+                    echo "⚠️  Pipeline completed with warnings"
+                }
+            }
+        }
         success {
-            echo "Pipeline completed successfully!"
+            echo '✅ Build Status: SUCCESS'
         }
         failure {
-            echo "Pipeline failed!"
-        }
-        always {
-            cleanWs()
+            echo '❌ Build Status: FAILED'
         }
     }
 }
