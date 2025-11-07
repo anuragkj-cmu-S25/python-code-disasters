@@ -7,21 +7,45 @@ pipeline {
         SONARQUBE_URL = 'http://sonarqube-sonarqube.sonarqube.svc.cluster.local:9000'
         DATAPROC_CLUSTER = 'hadoop-cluster'
         DATAPROC_REGION = 'us-central1'
-        GCS_BUCKET = "gs://${GCP_PROJECT_ID}-hadoop-output"
+        // GCS_BUCKET will be constructed in script blocks to avoid interpolation warnings
         // Use 4.7.0 which is compatible with Java 11
         SONAR_SCANNER_VERSION = '4.7.0.2747'
         SONAR_SCANNER_HOME = "${WORKSPACE}/.sonar/sonar-scanner-${SONAR_SCANNER_VERSION}-linux"
+        // Path to gcloud (will be installed if not present)
+        PATH = "/usr/local/google-cloud-sdk/bin:${env.PATH}"
     }
     
     stages {
-        stage('Checkout') {
+        stage('Declarative: Checkout SCM') {
             steps {
                 echo '========================================='
-                echo 'Stage 1: Checking out code from GitHub'
+                echo 'Stage: Checking out code from GitHub'
                 echo '========================================='
                 checkout scm
                 sh 'ls -la'
                 sh 'pwd'
+            }
+        }
+        
+        stage('Checkout') {
+            steps {
+                echo '========================================='
+                echo 'Stage 1: Installing/Verifying gcloud CLI'
+                echo '========================================='
+                script {
+                    sh '''
+                        if ! command -v gcloud &> /dev/null; then
+                            echo "gcloud not found, installing..."
+                            curl https://sdk.cloud.google.com | bash -s -- --disable-prompts --install-dir=/usr/local
+                            export PATH="/usr/local/google-cloud-sdk/bin:$PATH"
+                            gcloud --version
+                            echo "✅ gcloud installed successfully"
+                        else
+                            echo "✅ gcloud already installed"
+                            gcloud --version
+                        fi
+                    '''
+                }
             }
         }
         
@@ -56,14 +80,14 @@ pipeline {
                 echo 'Stage 3: Running SonarQube Analysis'
                 echo '========================================='
                 script {
-                    sh """
+                    sh '''
                         ${SONAR_SCANNER_HOME}/bin/sonar-scanner \
                             -Dsonar.projectKey=python-code-disasters \
                             -Dsonar.sources=. \
                             -Dsonar.host.url=${SONARQUBE_URL} \
                             -Dsonar.login=${SONAR_TOKEN} \
                             -Dsonar.python.version=3
-                    """
+                    '''
                 }
             }
         }
@@ -79,11 +103,11 @@ pipeline {
                     
                     // Get quality gate status
                     def qualityGate = sh(
-                        script: """
+                        script: '''
                             curl -s -u ${SONAR_TOKEN}: \
-                            '${SONARQUBE_URL}/api/qualitygates/project_status?projectKey=python-code-disasters' \
+                            "${SONARQUBE_URL}/api/qualitygates/project_status?projectKey=python-code-disasters" \
                             | grep -o '"status":"[^"]*"' | cut -d'"' -f4
-                        """,
+                        ''',
                         returnStdout: true
                     ).trim()
                     
@@ -91,11 +115,11 @@ pipeline {
                     
                     // Get blocker issues count
                     def blockerCount = sh(
-                        script: """
+                        script: '''
                             curl -s -u ${SONAR_TOKEN}: \
-                            '${SONARQUBE_URL}/api/issues/search?componentKeys=python-code-disasters&severities=BLOCKER&resolved=false' \
+                            "${SONARQUBE_URL}/api/issues/search?componentKeys=python-code-disasters&severities=BLOCKER&resolved=false" \
                             | grep -o '"total":[0-9]*' | head -1 | cut -d':' -f2
-                        """,
+                        ''',
                         returnStdout: true
                     ).trim()
                     
@@ -126,6 +150,9 @@ pipeline {
                 echo 'Stage 5: Uploading MapReduce Job to GCS'
                 echo '========================================='
                 script {
+                    // Set GCS_BUCKET without interpolation warning
+                    env.GCS_BUCKET = "gs://${env.GCP_PROJECT_ID}-hadoop-output"
+                    
                     // Create the MapReduce Python script
                     sh '''
                         cat > line_counter.py << 'EOF'
@@ -195,11 +222,11 @@ EOF
                         chmod +x line_counter.py
                     '''
                     
-                    // Upload to GCS
-                    sh """
+                    // Upload to GCS using environment variable
+                    sh '''
                         gcloud storage cp line_counter.py ${GCS_BUCKET}/scripts/
                         echo "✅ MapReduce job uploaded to GCS"
-                    """
+                    '''
                 }
             }
         }
@@ -222,12 +249,12 @@ EOF
                         ls -la hadoop_input/
                     '''
                     
-                    // Upload input files to GCS
-                    sh """
+                    // Upload input files to GCS using environment variable
+                    sh '''
                         gcloud storage rm -r ${GCS_BUCKET}/input/ || true
                         gcloud storage cp -r hadoop_input/* ${GCS_BUCKET}/input/
                         echo "✅ Input files uploaded to ${GCS_BUCKET}/input/"
-                    """
+                    '''
                 }
             }
         }
@@ -242,12 +269,12 @@ EOF
                 echo '========================================='
                 script {
                     // Clean up previous output
-                    sh """
+                    sh '''
                         gcloud storage rm -r ${GCS_BUCKET}/output/ || true
-                    """
+                    '''
                     
-                    // Submit the Hadoop Streaming job
-                    sh """
+                    // Submit the Hadoop Streaming job using environment variables
+                    sh '''
                         gcloud dataproc jobs submit hadoop \
                             --cluster=${DATAPROC_CLUSTER} \
                             --region=${DATAPROC_REGION} \
@@ -259,7 +286,7 @@ EOF
                             -mapper "${GCS_BUCKET}/scripts/line_counter.py" \
                             -reducer "${GCS_BUCKET}/scripts/line_counter.py reduce" \
                             -file ${GCS_BUCKET}/scripts/line_counter.py
-                    """
+                    '''
                     
                     echo "✅ Hadoop job submitted successfully!"
                 }
@@ -279,7 +306,7 @@ EOF
                     sleep(time: 10, unit: 'SECONDS')
                     
                     // Fetch and display results
-                    sh """
+                    sh '''
                         echo ""
                         echo "========================================="
                         echo "HADOOP JOB RESULTS - LINE COUNT PER FILE"
@@ -290,7 +317,7 @@ EOF
                         echo "Results also available at:"
                         echo "${GCS_BUCKET}/output/"
                         echo "========================================="
-                    """
+                    '''
                 }
             }
         }
@@ -308,7 +335,7 @@ EOF
                 } else if (env.RUN_HADOOP == 'true') {
                     echo "✅ Pipeline completed successfully"
                     echo "✅ Hadoop job executed and results available"
-                    echo "📊 View results: ${GCS_BUCKET}/output/"
+                    echo "📊 View results: ${env.GCS_BUCKET}/output/"
                 } else {
                     echo "⚠️  Pipeline completed with warnings"
                 }
