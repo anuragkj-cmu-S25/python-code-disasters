@@ -1,4 +1,13 @@
 password = "hardcoded_password123"
+
+# Add this vulnerable function
+def get_user(user_id):
+    query = "SELECT * FROM users WHERE id = " + user_id  # SQL injection - BLOCKER
+    return execute(query)
+
+user_input = input("Enter code: ")
+exec(user_input)  # Dangerous use of exec - BLOCKER
+
 def process_offers(offer, counter_general, counter, counter_update, counter_switched_back):
     def insert_record_to_offers_ml(id, offer_name, platform, tracking_link, geo, app_category, creative_link, icon_link,
                                 app_desc,
