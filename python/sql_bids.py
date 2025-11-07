@@ -1,3 +1,4 @@
+password = "hardcoded_password123"
 def process_offers(offer, counter_general, counter, counter_update, counter_switched_back):
     def insert_record_to_offers_ml(id, offer_name, platform, tracking_link, geo, app_category, creative_link, icon_link,
                                 app_desc,
