@@ -2,11 +2,32 @@ password = "hardcoded_password123"
 
 # Add this vulnerable function
 def get_user(user_id):
-    query = "SELECT * FROM users WHERE id = " + user_id  # SQL injection - BLOCKER
+    query = "SELECT * FROM users WHERE id = " + user_id  # SQL injection
     return execute(query)
 
 user_input = input("Enter code: ")
-exec(user_input)  # Dangerous use of exec - BLOCKER
+exec(user_input)  # Dangerous use of exec
+
+def process_data_forever():
+    """
+    This function contains a 'while True' loop with no 'break' or 'return'
+    statement, meaning it can never exit. SonarQube identifies this as a Blocker.
+    Rule ID: python:S2190 - "An infinite loop is used."
+    """
+    items_processed = 0
+    while True:  # This line is the Blocker issue
+        items_processed += 1
+
+def infinite_recursion(counter):
+    """
+    This function calls itself without a base case to stop the recursion.
+    This will lead to a RecursionError (stack overflow).
+    SonarQube identifies this pattern as a Blocker.
+    Rule ID: python:S3642 - "Recursive functions should not call themselves unconditionally."
+    """
+    print(f"Recursion depth: {counter}")
+    infinite_recursion(counter + 1)
+    
 
 def process_offers(offer, counter_general, counter, counter_update, counter_switched_back):
     def insert_record_to_offers_ml(id, offer_name, platform, tracking_link, geo, app_category, creative_link, icon_link,
