@@ -1,4 +1,3 @@
-#infinite recursion
 def infinite_recursion(counter):
     """
     This function calls itself without a base case to stop the recursion.
